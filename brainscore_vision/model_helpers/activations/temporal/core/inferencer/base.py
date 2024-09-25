@@ -1,3 +1,4 @@
+import os
 import functools
 import logging
 from collections import OrderedDict
@@ -6,7 +7,6 @@ from pathlib import Path
 
 import numpy as np
 from tqdm.auto import tqdm
-import gc
 
 from brainio.assemblies import NeuroidAssembly, walk_coords
 from brainscore_vision.model_helpers.utils import fullname
@@ -121,7 +121,6 @@ class Inferencer:
         self.visual_degrees = visual_degrees
         print("Visual degrees not supported yet. Bypassing...")
 
-    # given the paths of the stimuli and the layers, return the model activations as a NeuroidAssembly
     def __call__(self, paths: List[Union[str, Path]], layers: List[str], mmap_path: str = None) -> NeuroidAssembly:
         stimuli = self.load_stimuli(paths)
         num_stimuli = len(paths)
@@ -139,7 +138,7 @@ class Inferencer:
                 data[i, :] = flatten_activation
 
         model_assembly = NeuroidAssembly(
-            data, 
+            data.load(), 
             dims=["stimulus_path", "neuroid"],
             coords={
                 "stimulus_path": stimulus_paths, 

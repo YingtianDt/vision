@@ -99,14 +99,18 @@ class ActivationsExtractor:
             layers : List[str], 
             stimuli_identifier : str = None,
         ):
-        stimuli_paths.sort()
         if layers is None:
             layers = ['logits']
-
-        result_caching_dir = os.environ.get("RESULTCACHING_HOME", "~/.result_caching")
-        mmap_dir = os.path.join(result_caching_dir, "mmap")
-
         if self.identifier and stimuli_identifier:
+            fnc = functools.partial(self._from_paths_stored,
+                                    identifier=self.identifier, stimuli_identifier=stimuli_identifier)
+        else:
+            self._logger.debug(f"self.identifier `{self.identifier}` or stimuli_identifier {stimuli_identifier} "
+                               f"are not set, will not store")
+        fnc = self._from_paths
+
+        mmap_dir = os.environ.get("MMAPCACHING_HOME", None)
+        if mmap_dir and stimuli_identifier and self.identifier:
             mmap_path = os.path.join(mmap_dir, stimuli_identifier, self.identifier)
             os.makedirs(os.path.dirname(mmap_path), exist_ok=True)
         else:
@@ -116,9 +120,18 @@ class ActivationsExtractor:
         # to be run individually, compute activations for those, and then expand the activations to all paths again.
         # This is done here, before storing, so that we only store the reduced activations.
         reduced_paths = self._reduce_paths(stimuli_paths)
-        activations = self.inferencer(layers=layers, paths=reduced_paths, mmap_path=mmap_path)
+        activations = fnc(layers=layers, stimuli_paths=reduced_paths, mmap_path=mmap_path)
         activations = self._expand_paths(activations, original_paths=stimuli_paths)
         return activations
+
+    @store_xarray(identifier_ignore=['stimuli_paths', 'layers'], combine_fields={'layers': 'layer'})
+    def _from_paths_stored(self, identifier, layers, stimuli_identifier, stimuli_paths, mmap_path):
+        return self._from_paths(layers=layers, stimuli_paths=stimuli_paths, mmap_path=mmap_path)
+
+    def _from_paths(self, layers, stimuli_paths, mmap_path):
+        if len(layers) == 0:
+            raise ValueError("No layers passed to retrieve activations from")
+        return self.inferencer(stimuli_paths, layers, mmap_path=mmap_path)
 
     def _reduce_paths(self, stimuli_paths):
         return list(set(stimuli_paths))

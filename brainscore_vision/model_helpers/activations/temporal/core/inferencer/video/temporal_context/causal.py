@@ -85,7 +85,7 @@ class CausalInferencer(TemporalContextInferencerBase):
                 data[s, t, :] = flatten_activation
 
         model_assembly = NeuroidAssembly(
-            data, 
+            data.load(), 
             dims=["stimulus_path", "time_bin", "neuroid"],
             coords={
                 "stimulus_path": stimulus_paths, 

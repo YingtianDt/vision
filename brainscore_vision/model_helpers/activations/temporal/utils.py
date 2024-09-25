@@ -6,12 +6,27 @@ from brainscore_vision.model_helpers.brain_transformation.temporal import assemb
 
 def get_mem(memmap_path=None, **kwargs):
     if memmap_path is None:
-        return np.full(**kwargs, fill_value=np.nan)
+        arr = np.full(**kwargs, fill_value=np.nan)
+        return _np_wrapper(arr)
     else:
-        return writethrough_memmap(memmap_path, **kwargs)
+        return _writethrough_memmap(memmap_path, **kwargs)
+
+
+class _np_wrapper:
+    def __init__(self, data):
+        self._data = data
+
+    def load(self):
+        return self._data
+
+    def __setitem__(self, key, value):
+        self._data[key] = value
+
+    def __getitem__(self, key):
+        return self._data[key]
 
 # a map that write directly to the disk without loading into memory
-class writethrough_memmap:
+class _writethrough_memmap(_np_wrapper):
     def __init__(self, filename, **kwargs):
         self.filename = filename
         self.kwargs = kwargs
@@ -25,6 +40,10 @@ class writethrough_memmap:
                 self._created = True
             else:
                 self._data = np.memmap(self.filename, mode='r+', **self.kwargs)
+
+    def load(self):
+        self._load()
+        return self._data
 
     def _close(self):
         if self._data is not None:
