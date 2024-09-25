@@ -1,9 +1,11 @@
 import numpy as np
+import math
 from collections import OrderedDict
 from tqdm import tqdm
 
 from .base import TemporalContextInferencerBase
-from brainscore_vision.model_helpers.activations.temporal.utils import stack_with_nan_padding
+from brainscore_vision.model_helpers.activations.temporal.utils import stack_with_nan_padding, get_mem
+from brainio.assemblies import NeuroidAssembly
 
 
 class BlockInferencer(TemporalContextInferencerBase):
@@ -18,60 +20,57 @@ class BlockInferencer(TemporalContextInferencerBase):
     If num_frames or duration is given, the model's temporal context will be set to match the two.
     """
     
-    def inference(self, stimuli, layers):
+    def __call__(self, paths, layers, mmap_path=None):
         _, context = self._compute_temporal_context()
-        self._time_ends = []
 
         if np.isinf(context):
-            # if the context is inf, pass the whole video directively
-            self._time_ends = [inp.duration for inp in stimuli]
-            layer_activations = super().inference(stimuli, layers)
-            layer_activations = OrderedDict([(layer, [[a] for a in activations]) 
-                                             for layer, activations in layer_activations.items()]) 
-                                             # make one-clip video activations
-        else:
-            num_clips = []
-            for stimulus in stimuli:
-                duration = stimulus.duration
-                videos = []
-                # for each stimulus, divide it into block clips with the specified context
-                for time_start in np.arange(0, duration, context):
-                    time_end = time_start + context
-                    clip = stimulus.set_window(time_start, time_end, padding=self.out_of_bound_strategy)
-                    videos.append(clip)
-                # record the actual time_end (which could be larger than the duration of the original video)
-                # so that we can align the time correctly when packaging the activations
-                self._time_ends.append(time_end)
-                self._executor.add_stimuli(videos)
-                num_clips.append(len(videos))  # record the number of clips for each video
+            return super().__call__(paths, layers, mmap_path)
 
-            activations = self._executor.execute(layers)
-            layer_activations = OrderedDict()
-            for layer in layers:
-                clip_start = 0
-                for num_clip in num_clips:
-                    # retrieve clips from a video by num_clip
-                    clips = activations[layer][clip_start:clip_start+num_clip]  # clips for this video
-                    layer_activations.setdefault(layer, []).append(clips)
-                    clip_start += num_clip
-    
-        # concat the activations from the clips of the same video
-        ret = OrderedDict()
-        for layer in layers:
-            activation_dims = self.layer_activation_format[layer]
-            for clips in layer_activations[layer]:
-                # make T the first dimension, as [T, ...] for easy concatenation
-                # the package_layer will change accordingly
-                if 'T' in activation_dims:
-                    time_index = activation_dims.index('T')
-                    clips = [np.moveaxis(a, time_index, 0) for a in clips]
-                    ret.setdefault(layer, []).append(np.concatenate(clips, axis=0))
-                else:
-                    ret.setdefault(layer, []).append(np.stack(clips, axis=0))
+        EPS = 1e-6
+        interval = 1000 / self.fps - EPS
+        stimuli = self.load_stimuli(paths)
+        longest_stimulus = stimuli[np.argmax(np.array([stimulus.duration for stimulus in stimuli]))]
+        num_time_bins = int(int(math.ceil(longest_stimulus.duration / context)) * context / interval)
+        num_frames_per_block = int(context / interval)
+        num_stimuli = len(paths)
+        time_bin_coords = self._get_time_bin_coords(num_time_bins, self.fps)
+        stimulus_paths = paths
 
-        return ret
-    
-    def package_layer(self, activations, layer_spec, stimuli):
-        layer_spec = "T" + layer_spec.replace('T', '')  # T has been moved to the first dimension
-        stimuli = [stimulus.set_window(0, time_end) for stimulus, time_end in zip(stimuli, self._time_ends)]
-        return super().package_layer(activations, layer_spec, stimuli) 
+        t_offsets = []
+        stimulus_index = []
+        for s, stimulus in enumerate(stimuli):
+            duration = stimulus.duration
+            videos = []
+            # for each stimulus, divide it into block clips with the specified context
+            for time_start in np.arange(0, duration, context):
+                time_end = time_start + context
+                clip = stimulus.set_window(time_start, time_end, padding=self.out_of_bound_strategy)
+                t_offsets.append(int(time_start / interval))
+                videos.append(clip)
+                stimulus_index.append(s)
+            self._executor.add_stimuli(videos)
+
+        data = None
+        for temporal_layer_activations, indicies in self._executor.execute_batch(layers):
+            for temporal_layer_activation, i in zip(temporal_layer_activations, indicies):
+                s = stimulus_index[i]
+                # determine the time bin correspondence for each layer
+                for t, layer_activation in self._disect_time(temporal_layer_activation, num_frames_per_block):
+                    if data is None:
+                        num_feats, neuroid_coords = self._get_neuroid_coords(layer_activation, self._remove_T(self.layer_activation_format))
+                        data = get_mem(mmap_path, shape=(num_stimuli, num_time_bins, num_feats), dtype=self.dtype)
+                    flatten_activation = self._flatten_activations(layer_activation)
+                    t = t_offsets[i] + t
+                    data[s, t, :] = flatten_activation
+
+        model_assembly = NeuroidAssembly(
+            data, 
+            dims=["stimulus_path", "time_bin", "neuroid"],
+            coords={
+                "stimulus_path": stimulus_paths, 
+                **neuroid_coords,
+                **time_bin_coords,
+            }, 
+        )
+
+        return model_assembly

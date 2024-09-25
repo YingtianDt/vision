@@ -126,10 +126,11 @@ class BatchExecutor:
 
         Returns
         -------
-        indices : list
-            indices of the source data after sorting.
-        masks : list of list
+        all_indices : list of list
+            indices of the source data in each batch.
+        all_masks : list of list
             masks for each batch to indicate whether the datum is padding sample.
+            1 for not padding, 0 for padding.
         all_batches : list of list
             list of batches.
         """
@@ -138,21 +139,19 @@ class BatchExecutor:
 
         if grouper is None:
             sorted_data = np.array(data, dtype='object')
-            inverse_indices = np.arange(N)
+            sorted_indices = np.arange(N)
             sorted_properties = [0] * N
         else:
             properties = np.array([hash(grouper(d)) for d in data])
             sorted_indices = np.argsort(properties)
-            inverse_indices = np.argsort(sorted_indices)  # inverse transform
             sorted_properties = properties[sorted_indices]
             sorted_data = np.array(data, dtype='object')[sorted_indices]
-        inverse_indices = list(inverse_indices)
+        sorted_indices = list(sorted_indices)
 
         index = 0
         all_batches = []
         all_indices = []
-        indices = []
-        masks = []
+        all_masks = []
         while index < N:
             property_anchor = sorted_properties[index]
             batch = []
@@ -160,7 +159,7 @@ class BatchExecutor:
                 batch.append(sorted_data[index])
                 index += 1
             
-            batch_indices = inverse_indices[index-len(batch):index]
+            batch_indices = sorted_indices[index-len(batch):index]
 
             if padding:
                 num_padding = batch_size - len(batch)
@@ -169,12 +168,10 @@ class BatchExecutor:
                     batch += batch_padding
             else:
                 num_padding = 0
-            masks.append([True] * (len(batch)-num_padding) + [False] * num_padding) 
-
+            all_masks.append([True] * (len(batch)-num_padding) + [False] * num_padding) 
             all_batches.append(batch)
-            all_indices.append(batch_indices)
-            indices.extend(batch_indices)
-        return indices, masks, all_batches
+            all_indices.append(batch_indices + [-1] * num_padding)
+        return all_indices, all_masks, all_batches
 
     def register_before_hook(self, hook: Callable[[Stimulus], Stimulus], index=None):
         # hook: Stimulus -> Stimulus
@@ -193,27 +190,41 @@ class BatchExecutor:
         self.stimuli = []
 
     def execute(self, layers):
-        indices, masks, batches = self._get_batches(self.stimuli, self.batch_size, 
+        full_indices = []
+        full_activations = OrderedDict()
+        for layer_activations, indices in self.execute_batch(layers):
+            full_indices.extend(indices)
+            for layer_activation in layer_activations:
+                for layer, activations in layer_activation.items():
+                    full_activations.setdefault(layer, []).append(activations)
+        
+        for layer, activations in full_activations.items():
+            full_activations[layer] = [activations[i] for i in full_indices]
+
+        return full_activations
+
+    def execute_batch(self, layers):
+        all_indices, all_masks, batches = self._get_batches(self.stimuli, self.batch_size, 
                                                     grouper=self.batch_grouper,
                                                     padding=self.batch_padding)
         
         before_pipe = _pipeline(*self.before_hooks)
         after_pipe = _pipeline(*self.after_hooks)
         
-        layer_activations = OrderedDict()
-        for mask, batch in tqdm(zip(masks, batches), desc="activations", total=len(batches)):
+        for indices, mask, batch in tqdm(zip(all_indices, all_masks, batches), desc="activations", total=len(batches)):
             batch = [before_pipe(stimulus) for stimulus in batch]
             model_inputs = self._mapper.map(self.preprocess, batch)
             batch_activations = self.get_activations(model_inputs, layers)
             assert isinstance(batch_activations, OrderedDict)
-            for layer, activations in batch_activations.items():
+            for i, (layer, activations) in enumerate(batch_activations.items()):
                 results = [after_pipe(arr, layer, stimulus) 
                                for not_pad, arr, stimulus in zip(mask, activations, batch) 
                                if not_pad]
-                layer_activations.setdefault(layer, []).extend(results)
-
-        for layer, activations in layer_activations.items():
-            layer_activations[layer] = [activations[i] for i in indices]
-
+                if i == 0:
+                    layer_activations = [OrderedDict() for _ in range(len(results))]
+                
+                for j, result in enumerate(results):
+                    layer_activations[j][layer] = result
+            yield layer_activations, indices
+            
         self.clear_stimuli()
-        return layer_activations

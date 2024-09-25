@@ -4,6 +4,44 @@ import numpy as np
 from brainscore_vision.model_helpers.brain_transformation.temporal import assembly_time_align
 
 
+def get_mem(memmap_path=None, **kwargs):
+    if memmap_path is None:
+        return np.full(**kwargs, fill_value=np.nan)
+    else:
+        return writethrough_memmap(memmap_path, **kwargs)
+
+# a map that write directly to the disk without loading into memory
+class writethrough_memmap:
+    def __init__(self, filename, **kwargs):
+        self.filename = filename
+        self.kwargs = kwargs
+        self._created = False
+        self._data = None
+
+    def _load(self):
+        if self._data is None:
+            if not self._created:
+                self._data = np.memmap(self.filename, mode='w+', **self.kwargs)
+                self._created = True
+            else:
+                self._data = np.memmap(self.filename, mode='r+', **self.kwargs)
+
+    def _close(self):
+        if self._data is not None:
+            self._data.flush()
+            del self._data
+            self._data = None
+
+    def __setitem__(self, key, value):
+        self._load()
+        self._data[key] = value
+        self._close()
+
+    def __getitem__(self, key):
+        self._load()
+        return self._data[key]
+
+
 def concat_with_nan_padding(arr_list, axis=0, dtype=np.float16):
     # Get shapes of all arrays
     shapes = [np.array(arr.shape) for arr in arr_list]

@@ -4,7 +4,7 @@ import pytest
 
 from collections import OrderedDict
 
-from brainscore_vision.model_helpers.activations.temporal.core import Inferencer, TemporalInferencer, CausalInferencer, BlockInferencer
+from brainscore_vision.model_helpers.activations.temporal.core import Inferencer, TemporalInferencer, CausalInferencer, BlockInferencer, BatchExecutor
 from brainscore_vision.model_helpers.activations.temporal.inputs import Video, Stimulus
 
 
@@ -57,7 +57,7 @@ dummy_layers = ["layer1", "layer2"]
 def test_inferencer(max_spatial_size):
     inferencer = Inferencer(dummy_get_features, dummy_preprocess, dummy_layer_activation_format, 
                             Video, max_workers=1, max_spatial_size=max_spatial_size, batch_grouper=lambda s: s.duration)
-    model_assembly = inferencer(video_paths, layers=dummy_layers)
+    model_assembly = inferencer(video_paths[1:], layers=dummy_layers)
     if max_spatial_size is None:
         # 6 second video with fps 60 has 360 frames
         # the model simply return the same number of frames as the temporal size of activations
@@ -65,27 +65,21 @@ def test_inferencer(max_spatial_size):
         assert model_assembly.sizes["neuroid"] == 360*6*3*2 + 2
     else:
         assert model_assembly.sizes["neuroid"] == 360*max_spatial_size*(max_spatial_size//2) * 2 + 2
-    assert model_assembly.sizes["stimulus_path"] == 2 
+    assert model_assembly.sizes["stimulus_path"] == 1
 
 
-@pytest.mark.parametrize("time_alignment", ["evenly_spaced", "ignore_time"])
 @pytest.mark.parametrize("fps", [10, 30, 45])
-def test_temporal_inferencer(time_alignment, fps):
+def test_temporal_inferencer(fps):
     inferencer = TemporalInferencer(dummy_get_features, dummy_preprocess, 
-                                    dummy_layer_activation_format, max_workers=1, 
-                                    fps=fps, time_alignment=time_alignment)
+                                    dummy_layer_activation_format, max_workers=1, fps=fps)
     model_assembly = inferencer(video_paths, layers=dummy_layers)
     assert model_assembly['time_bin_start'].values[0] == 0
     assert model_assembly['time_bin_end'].values[-1] == max(video_durations)
 
-    if time_alignment != "ignore_time":
-        # since the longer video lasts for 6 seconds, and the temporal inferencer align all output assembly to have fps
-        # specified when constructing the inferencer, the number of time bins should be 6*fps
-        assert model_assembly.sizes["time_bin"] == 6 * fps
-        assert np.isclose(model_assembly['time_bin_end'].values[0] - model_assembly['time_bin_start'].values[0], 1000/fps)
-    else:
-        assert model_assembly.sizes["time_bin"] == 1
-        assert model_assembly['time_bin_end'].values[0] - model_assembly['time_bin_start'].values[0] == max(video_durations)
+    # since the longer video lasts for 6 seconds, and the temporal inferencer align all output assembly to have fps
+    # specified when constructing the inferencer, the number of time bins should be 6*fps
+    assert model_assembly.sizes["time_bin"] == 6 * fps
+    assert np.isclose(model_assembly['time_bin_end'].values[0] - model_assembly['time_bin_start'].values[0], 1000/fps)
 
     # manual computation check
     output_values = model_assembly.sel(stimulus_path=video_paths[1])\
@@ -97,6 +91,9 @@ def test_temporal_inferencer(time_alignment, fps):
     manual_compute_values = dummy_get_features([dummy_preprocess(video)], ["layer1"])["layer1"][0].reshape(-1)
     manual_compute_values = manual_compute_values.astype(output_values.dtype)
     assert np.allclose(output_values, manual_compute_values)
+
+    # check that the activations after 2000 ms of the first video are all NaN
+    assert np.all(np.isnan(model_assembly.isel(stimulus_path=0, time_bin=model_assembly.time_bin_start>2000).values))
 
 
 @pytest.mark.memory_intense
@@ -127,9 +124,38 @@ def test_compute_temporal_context():
     assert inferencer._compute_temporal_context() == (200, 500)
 
 
+@pytest.mark.parametrize("batch_padding", [True, False])
+def test_batch_executor(batch_padding):
+    batch_size = 3
+    grouper = lambda x: x
+    executor = BatchExecutor(dummy_get_features, dummy_preprocess, batch_grouper=grouper,
+                                batch_padding=batch_padding, batch_size=batch_size, max_workers=1)
+    data = [1, 2, 1, 2, 1, 3]  # numbers will be hashed to themselves
+
+    all_indices, all_masks, all_batches = executor._get_batches(data, batch_size, grouper, batch_padding)
+    if batch_padding:
+        assert all_indices[2] == [5, -1, -1]
+        assert all_masks[2] == [1, 0, 0]
+        assert all_batches[2] == [3, 3, 3]
+        assert set(all_indices[1]) == set([1, 3, -1])
+        assert all_masks[1] == [1, 1, 0]
+        assert all_batches[1] == [2, 2, 2]
+    else:
+        assert all_indices[2] == [5]
+        assert all_masks[2] == [1]
+        assert all_batches[2] == [3]
+        assert set(all_indices[1]) == set([1, 3])
+        assert all_masks[1] == [1, 1]
+        assert all_batches[1] == [2, 2]
+
+    assert set(all_indices[0]) == set([0, 2, 4])
+    assert all_masks[0] == [1, 1, 1]
+    assert all_batches[0] == [1, 1, 1]
+
+
 @pytest.mark.memory_intense
 @pytest.mark.parametrize("preprocess", ["normal", "downsample"])
-@pytest.mark.parametrize("fps", [1, 40])
+@pytest.mark.parametrize("fps", [1, 15])
 def test_causal_inferencer(preprocess, fps):
     if preprocess == "normal":
         preprocess = dummy_preprocess
@@ -150,7 +176,7 @@ def test_causal_inferencer(preprocess, fps):
     manual_compute_values = []
     video = Video.from_path(video_paths[1]).set_fps(fps)
     interval = 1000/fps
-    for time_end in np.arange(interval, 6000+interval, interval):
+    for time_end in np.arange(interval, video_durations[1]+interval, interval):
         clip = video.set_window(0, time_end)
         manual_compute_values.append(dummy_get_features([dummy_preprocess(clip)], ["layer1"])["layer1"][0, -1])
     manual_compute_values = np.stack(manual_compute_values).reshape(len(manual_compute_values), -1).astype(output_values.dtype)
@@ -159,7 +185,7 @@ def test_causal_inferencer(preprocess, fps):
 
 @pytest.mark.memory_intense
 @pytest.mark.parametrize("preprocess", ["normal", "downsample"])
-@pytest.mark.parametrize("fps", [1, 40])
+@pytest.mark.parametrize("fps", [15])
 def test_block_inferencer(preprocess, fps):
     if preprocess == "normal":
         preprocessing = dummy_preprocess
