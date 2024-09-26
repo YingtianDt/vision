@@ -12,7 +12,7 @@ from brainio.assemblies import NeuroidAssembly, walk_coords
 from brainscore_vision.model_helpers.utils import fullname
 
 from brainscore_vision.model_helpers.activations.temporal.core.executor import BatchExecutor
-from brainscore_vision.model_helpers.activations.temporal.utils import stack_with_nan_padding, batch_2d_resize, get_mem
+from brainscore_vision.model_helpers.activations.temporal.utils import stack_with_nan_padding, batch_2d_resize, data_assembly_mmap
 from brainscore_vision.model_helpers.activations.temporal.inputs import Stimulus
 
 
@@ -133,12 +133,11 @@ class Inferencer:
             for layer_activation, i in zip(layer_activations, indicies):
                 if data is None:
                     num_feats, neuroid_coords = self._get_neuroid_coords(layer_activation, self.layer_activation_format)
-                    data = get_mem(mmap_path, shape=(num_stimuli, num_feats), dtype=self.dtype)
+                    data = data_assembly_mmap(mmap_path, shape=(num_stimuli, num_feats), dtype=self.dtype, fill_value=np.nan)
                 flatten_activation = self._flatten_activations(layer_activation)
                 data[i, :] = flatten_activation
 
-        model_assembly = NeuroidAssembly(
-            data.load(), 
+        data.register_meta( 
             dims=["stimulus_path", "neuroid"],
             coords={
                 "stimulus_path": stimulus_paths, 
@@ -146,7 +145,7 @@ class Inferencer:
             }, 
         )
 
-        return model_assembly
+        return data.to_assembly()
 
     def load_stimuli(self, paths : List[Union[str, Path]]) -> List[Stimulus]:
         ret = []

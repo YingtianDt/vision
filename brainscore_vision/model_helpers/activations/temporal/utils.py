@@ -1,49 +1,43 @@
 import os
 import numpy as np
+import pickle
 
 from brainscore_vision.model_helpers.brain_transformation.temporal import assembly_time_align
+from brainio.assemblies import DataAssembly
 
-
-def get_mem(memmap_path=None, **kwargs):
-    if memmap_path is None:
-        arr = np.full(**kwargs, fill_value=np.nan)
-        return _np_wrapper(arr)
-    else:
-        return _writethrough_memmap(memmap_path, **kwargs)
-
-
-class _np_wrapper:
-    def __init__(self, data):
-        self._data = data
-
-    def load(self):
-        return self._data
-
-    def __setitem__(self, key, value):
-        self._data[key] = value
-
-    def __getitem__(self, key):
-        return self._data[key]
 
 # a map that write directly to the disk without loading into memory
-class _writethrough_memmap(_np_wrapper):
-    def __init__(self, filename, **kwargs):
-        self.filename = filename
+class data_assembly_mmap:
+    def __init__(self, filepath=None, **kwargs):
+        self.filepath = filepath
         self.kwargs = kwargs
-        self._created = False
-        self._data = None
+        self._in_memory = filepath is None
 
-    def _load(self):
+        if self._in_memory:
+            self._data = np.full(**kwargs)
+            self._created = True
+        else:
+            self._data = None
+            self._created = False
+            self.data_file = os.path.join(self.filepath, "data.npy")
+            self.meta_file = os.path.join(self.filepath, "meta.pkl")
+
+    def _open(self):
+        if self._in_memory:
+            return
+
         if self._data is None:
+            kwargs = self.kwargs.copy()
+            fill_value = self.kwargs['fill_value'] if 'fill_value' in self.kwargs else None
+            if fill_value is not None:
+                del kwargs['fill_value'] 
             if not self._created:
-                self._data = np.memmap(self.filename, mode='w+', **self.kwargs)
+                self._data = np.memmap(self.data_file, mode='w+', **kwargs)
+                if fill_value is not None:
+                    self._data[:] = fill_value
                 self._created = True
             else:
-                self._data = np.memmap(self.filename, mode='r+', **self.kwargs)
-
-    def load(self):
-        self._load()
-        return self._data
+                self._data = np.memmap(self.data_file, mode='r+', **kwargs)
 
     def _close(self):
         if self._data is not None:
@@ -52,14 +46,53 @@ class _writethrough_memmap(_np_wrapper):
             self._data = None
 
     def __setitem__(self, key, value):
-        self._load()
+        self._open()
         self._data[key] = value
-        self._close()
+        if not self._in_memory:
+            self._close()
 
     def __getitem__(self, key):
-        self._load()
+        self._open()
         return self._data[key]
 
+    def register_meta(self, dims, coords):
+        self.coords = coords
+        self.dims = dims
+
+        if not self._in_memory:
+            with open(self.meta_file, 'wb') as f:
+                pickle.dump((dims, coords, self.kwargs), f)
+
+    def to_assembly(self):
+        self._open()
+        return DataAssembly(self._data, coords=self.coords, dims=self.dims)
+
+    @staticmethod
+    def is_saved(filepath):
+        data_file = os.path.join(filepath, "data.npy")
+        meta_file = os.path.join(filepath, "meta.pkl")
+        return os.path.exists(data_file) and os.path.exists(meta_file)
+
+    @staticmethod
+    def load(filepath):
+        if filepath is None:
+            return None
+
+        if not data_assembly_mmap.is_saved(filepath):
+            return None
+
+        meta_file = os.path.join(filepath, "meta.pkl")
+        with open(meta_file, 'rb') as f:
+            dims, coords, kwargs = pickle.load(f)
+
+        data = data_assembly_mmap(filepath, **kwargs)
+        data._created = True
+        data._open()
+        data.dims = dims
+        data.coords = coords
+
+        return data
+        
 
 def concat_with_nan_padding(arr_list, axis=0, dtype=np.float16):
     # Get shapes of all arrays

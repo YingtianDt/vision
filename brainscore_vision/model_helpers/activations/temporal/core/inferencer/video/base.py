@@ -3,7 +3,7 @@ from typing import Union, Tuple, Callable, Hashable, List, Dict
 from pathlib import Path
 
 from brainscore_vision.model_helpers.activations.temporal.inputs import Video, Stimulus
-from brainscore_vision.model_helpers.activations.temporal.utils import assembly_align_to_fps, stack_with_nan_padding, get_mem
+from brainscore_vision.model_helpers.activations.temporal.utils import assembly_align_to_fps, stack_with_nan_padding, data_assembly_mmap
 from brainio.assemblies import NeuroidAssembly
 
 from ..base import Inferencer
@@ -92,12 +92,11 @@ class TemporalInferencer(Inferencer):
                 for t, layer_activation in self._disect_time(temporal_layer_activation, stimulus.num_frames):
                     if data is None:
                         num_feats, neuroid_coords = self._get_neuroid_coords(layer_activation, self._remove_T(self.layer_activation_format))
-                        data = get_mem(mmap_path, shape=(num_stimuli, num_time_bins, num_feats), dtype=self.dtype)
+                        data = data_assembly_mmap(mmap_path, shape=(num_stimuli, num_time_bins, num_feats), dtype=self.dtype, fill_value=np.nan)
                     flatten_activation = self._flatten_activations(layer_activation)
                     data[i, t, :] = flatten_activation
 
-        model_assembly = NeuroidAssembly(
-            data.load(), 
+        data.register_meta(
             dims=["stimulus_path", "time_bin", "neuroid"],
             coords={
                 "stimulus_path": stimulus_paths, 
@@ -106,7 +105,7 @@ class TemporalInferencer(Inferencer):
             }, 
         )
 
-        return model_assembly
+        return data.to_assembly()
 
     def _disect_time(self, temporal_layer_activation, num_frames):
         paces = {}
