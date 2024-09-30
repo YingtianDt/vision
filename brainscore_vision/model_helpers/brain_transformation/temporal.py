@@ -91,7 +91,7 @@ def time_align(
 
 def assembly_time_align(
         source : DataAssembly, 
-        target_time_bins : List[Tuple[int]], 
+        target_time_bins : List[Tuple[float]], 
         mode : str = "portion"
     ) -> DataAssembly:
     """ Align the time bins of the source assembly to the target time bins."""

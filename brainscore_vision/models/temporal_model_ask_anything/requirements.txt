@@ -1,0 +1,4 @@
+ask-anything @ git+https://github.com/YingtianDt/Ask-Anything.git
+peft
+torchvision
+timm
