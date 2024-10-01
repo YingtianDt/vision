@@ -6,6 +6,119 @@ from brainscore_vision.model_helpers.brain_transformation.temporal import assemb
 from brainio.assemblies import DataAssembly
 
 
+# allow efficient fill_value for memmap
+class custom_memmap(np.memmap):
+    def __new__(subtype, filename, dtype=np.uint8, mode='r+', offset=0,
+                shape=None, order='C', fill_value=None):
+        # Import here to minimize 'import numpy' overhead
+        import mmap
+        import os.path
+        import struct
+        from numpy import ndarray
+
+        mode_equivalents = {
+            "readonly":"r",
+            "copyonwrite":"c",
+            "readwrite":"r+",
+            "write":"w+"
+        }
+
+        dtypedescr = np.dtype
+        valid_filemodes = ["r", "c", "r+", "w+"]
+        writeable_filemodes = ["r+", "w+"]
+
+        try:
+            mode = mode_equivalents[mode]
+        except KeyError as e:
+            if mode not in valid_filemodes:
+                raise ValueError(
+                    "mode must be one of {!r} (got {!r})"
+                    .format(valid_filemodes + list(mode_equivalents.keys()), mode)
+                ) from None
+
+        if mode == 'w+' and shape is None:
+            raise ValueError("shape must be given if mode == 'w+'")
+
+        if hasattr(filename, 'read'):
+            f_ctx = nullcontext(filename)
+        else:
+            f_ctx = open(
+                os.fspath(filename),
+                ('r' if mode == 'c' else mode)+'b'
+            )
+
+        with f_ctx as fid:
+            fid.seek(0, 2)
+            flen = fid.tell()
+            descr = dtypedescr(dtype)
+            _dbytes = descr.itemsize
+
+            if shape is None:
+                bytes = flen - offset
+                if bytes % _dbytes:
+                    raise ValueError("Size of available data is not a "
+                            "multiple of the data-type size.")
+                size = bytes // _dbytes
+                shape = (size,)
+            else:
+                if type(shape) not in (tuple, list):
+                    try:
+                        shape = [operator.index(shape)]
+                    except TypeError:
+                        pass
+                shape = tuple(shape)
+                size = np.intp(1)  # avoid default choice of np.int_, which might overflow
+                for k in shape:
+                    size *= k
+
+            bytes = int(offset + size*_dbytes)
+
+            if mode in ('w+', 'r+') and flen < bytes:
+                fid.seek(bytes - 1, 0)
+                fid.write(b'\0')
+                fid.flush()
+
+            if mode == 'w+' and fill_value is not None:
+                val = np.array(fill_value).astype(dtype).tobytes()
+                fid.seek(0)
+                # chunk writing
+                TARGET_BLOCK_SIZE = 1024 * 1024 * 10
+                for i in range(0, bytes, TARGET_BLOCK_SIZE):
+                    fid.write(val * min(TARGET_BLOCK_SIZE, bytes - i))
+                fid.flush()
+
+            if mode == 'c':
+                acc = mmap.ACCESS_COPY
+            elif mode == 'r':
+                acc = mmap.ACCESS_READ
+            else:
+                acc = mmap.ACCESS_WRITE
+
+            start = offset - offset % mmap.ALLOCATIONGRANULARITY
+            bytes -= start
+            array_offset = offset - start
+            mm = mmap.mmap(fid.fileno(), bytes, access=acc, offset=start)
+
+            self = ndarray.__new__(subtype, shape, dtype=descr, buffer=mm,
+                                   offset=array_offset, order=order)
+            self._mmap = mm
+            self.offset = offset
+            self.mode = mode
+
+            if isinstance(filename, os.PathLike):
+                # special case - if we were constructed with a pathlib.path,
+                # then filename is a path object, not a string
+                self.filename = filename.resolve()
+            elif hasattr(fid, "name") and isinstance(fid.name, str):
+                # py3 returns int for TemporaryFile().name
+                self.filename = os.path.abspath(fid.name)
+            # same as memmap copies (e.g. memmap + 1)
+            else:
+                self.filename = None
+
+        return self
+
+
 # a map that write directly to the disk without loading into memory
 class data_assembly_mmap:
     def __init__(self, filepath=None, **kwargs):
@@ -28,16 +141,12 @@ class data_assembly_mmap:
 
         if self._data is None:
             kwargs = self.kwargs.copy()
-            fill_value = self.kwargs['fill_value'] if 'fill_value' in self.kwargs else None
-            if fill_value is not None:
-                del kwargs['fill_value'] 
+            fill_value = self.kwargs.get("fill_value", None)
             if not self._created:
-                self._data = np.memmap(self.data_file, mode='w+', **kwargs)
-                if fill_value is not None:
-                    self._data[:] = fill_value
+                self._data = custom_memmap(self.data_file, mode='w+', **kwargs)
                 self._created = True
             else:
-                self._data = np.memmap(self.data_file, mode='r+', **kwargs)
+                self._data = custom_memmap(self.data_file, mode='r+', **kwargs)
 
     def _close(self):
         if self._data is not None:

@@ -20,12 +20,12 @@ def _pipeline(*funcs):
     return _func
 
     
-# a mapper that execute a function in parallel with joblib
-class JoblibMapper:
+# a mapper that execute a fxunction in parallel with joblib
+class JobsMapper:
     def __init__(self, num_threads: int):
         self._num_threads = num_threads
-        self._pool = Parallel(n_jobs=num_threads, verbose=False, backend="loky")
-        self._failed_to_pickle_func = False
+        # self._pool = Parallel(n_jobs=num_threads, verbose=False, backend="loky")
+        self._failed_to_pickle_func = True
 
     def map(self, func, *data):
         from joblib.externals.loky.process_executor import TerminatedWorkerError, BrokenProcessPool
@@ -102,7 +102,7 @@ class BatchExecutor:
         if self.max_workers is not None:
             num_threads = min(self.max_workers, num_threads)
         self._logger.info(f"Using {num_threads} threads for parallel processing.")
-        self._mapper = JoblibMapper(num_threads)
+        self._mapper = JobsMapper(num_threads)
 
         # processing hooks
         self.before_hooks = []
@@ -210,21 +210,25 @@ class BatchExecutor:
         
         before_pipe = _pipeline(*self.before_hooks)
         after_pipe = _pipeline(*self.after_hooks)
-        
-        for indices, mask, batch in tqdm(zip(all_indices, all_masks, batches), desc="activations", total=len(batches)):
+
+        # avoid keeping the whole batch in memory
+        def run(batch, mask, indices):
             batch = [before_pipe(stimulus) for stimulus in batch]
             model_inputs = self._mapper.map(self.preprocess, batch)
             batch_activations = self.get_activations(model_inputs, layers)
             assert isinstance(batch_activations, OrderedDict)
             for i, (layer, activations) in enumerate(batch_activations.items()):
                 results = [after_pipe(arr, layer, stimulus) 
-                               for not_pad, arr, stimulus in zip(mask, activations, batch) 
-                               if not_pad]
+                            for not_pad, arr, stimulus in zip(mask, activations, batch) 
+                            if not_pad]
                 if i == 0:
                     layer_activations = [OrderedDict() for _ in range(len(results))]
                 
                 for j, result in enumerate(results):
                     layer_activations[j][layer] = result
-            yield layer_activations, indices
+            return layer_activations, indices
+
+        for indices, mask, batch in tqdm(zip(all_indices, all_masks, batches), desc="activations", total=len(batches)):
+            yield run(batch, mask, indices)
             
         self.clear_stimuli()
