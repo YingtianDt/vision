@@ -39,15 +39,17 @@ class custom_memmap(np.memmap):
         if mode == 'w+' and shape is None:
             raise ValueError("shape must be given if mode == 'w+'")
 
-        if hasattr(filename, 'read'):
-            f_ctx = nullcontext(filename)
-        else:
-            f_ctx = open(
-                os.fspath(filename),
-                ('r' if mode == 'c' else mode)+'b'
-            )
+        def get_ctx():
+            if hasattr(filename, 'read'):
+                f_ctx = nullcontext(filename)
+            else:
+                f_ctx = open(
+                    os.fspath(filename),
+                    ('r' if mode == 'c' else mode)+'b'
+                )
+            return f_ctx
 
-        with f_ctx as fid:
+        with get_ctx() as fid:
             fid.seek(0, 2)
             flen = fid.tell()
             descr = dtypedescr(dtype)
@@ -80,12 +82,13 @@ class custom_memmap(np.memmap):
 
             if mode == 'w+' and fill_value is not None:
                 val = np.array(fill_value).astype(dtype).tobytes()
-                fid.seek(0)
-                # chunk writing
                 TARGET_BLOCK_SIZE = 1024 * 1024 * 10
+                # chunk writing
                 for i in range(0, bytes, TARGET_BLOCK_SIZE):
-                    fid.write(val * min(TARGET_BLOCK_SIZE, bytes - i))
-                fid.flush()
+                    with get_ctx() as _fid:
+                        _fid.seek(i)
+                        _fid.write(val * min(TARGET_BLOCK_SIZE, bytes - i))
+                        _fid.flush()
 
             if mode == 'c':
                 acc = mmap.ACCESS_COPY
