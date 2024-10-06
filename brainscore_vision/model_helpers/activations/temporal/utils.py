@@ -39,7 +39,7 @@ class custom_memmap(np.memmap):
         if mode == 'w+' and shape is None:
             raise ValueError("shape must be given if mode == 'w+'")
 
-        def get_ctx():
+        def get_ctx(mode):
             if hasattr(filename, 'read'):
                 f_ctx = nullcontext(filename)
             else:
@@ -49,7 +49,7 @@ class custom_memmap(np.memmap):
                 )
             return f_ctx
 
-        with get_ctx() as fid:
+        with get_ctx(mode) as fid:
             fid.seek(0, 2)
             flen = fid.tell()
             descr = dtypedescr(dtype)
@@ -85,7 +85,7 @@ class custom_memmap(np.memmap):
                 TARGET_BLOCK_SIZE = 1024 * 1024 * 10
                 # chunk writing
                 for i in range(0, bytes, TARGET_BLOCK_SIZE):
-                    with get_ctx() as _fid:
+                    with get_ctx(mode='r+') as _fid:
                         _fid.seek(i)
                         _fid.write(val * min(TARGET_BLOCK_SIZE, bytes - i))
                         _fid.flush()
