@@ -155,7 +155,7 @@ def test_batch_executor(batch_padding):
 
 @pytest.mark.memory_intense
 @pytest.mark.parametrize("preprocess", ["normal", "downsample"])
-@pytest.mark.parametrize("fps", [1, 15])
+@pytest.mark.parametrize("fps", [1, 10])
 def test_causal_inferencer(preprocess, fps):
     if preprocess == "normal":
         preprocess = dummy_preprocess

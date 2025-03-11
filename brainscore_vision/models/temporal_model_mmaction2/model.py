@@ -99,12 +99,35 @@ def get_model(identifier):
             "num_frames": (5, np.inf),
         }
 
-    if identifier == "TSM":
+    if identifier in ["TSM", "TSM-smthsmthv2"]:
         process_output = None
         inferencer_kwargs = {
             "fps": 25,
             "layer_activation_format": {},
         }
+
+    if identifier in ["MViT-V2-B-Kinetics400", "MViT-V2-B-smthsmthv2"]:
+        process_output = None
+        inferencer_kwargs = {
+            "fps": 16,
+            "num_frames": 32,
+            "layer_activation_format": {
+                "backbone.patch_embed": "THWC",
+                **{f"backbone.blocks.{i}": "THWC" for i in range(0, 24, LARGE_MODEL_LAYER_STEP)},
+                "cls_head": "C",
+            },
+        }
+
+        def process_output(layer, layer_name, input, output):
+            if layer_name.startswith("backbone"):
+                output, thw = output
+                t, h, w = thw
+                if layer_name != "backbone.patch_embed":
+                    output = output[:, 1:]  # remove cls 
+                b, n, c = output.shape
+                assert n == t*h*w
+                output = output.view(b, t, h, w, c)
+            return output
 
     if identifier == "SlowFast":
         process_output = None

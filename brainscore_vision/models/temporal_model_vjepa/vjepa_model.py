@@ -13,7 +13,7 @@ class VJEPA_encoder(nn.Module):
         self.embed_dim = embed_dim
 
         # download the model and put it in the folder.
-        state_dict = torch.load(weights_path)
+        state_dict = torch.load(weights_path, map_location='cpu')
 
         # following the config for the model
         crop_size = 224

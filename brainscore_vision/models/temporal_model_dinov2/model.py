@@ -17,7 +17,7 @@ IMAGENET_DEFAULT_MEAN = (0.485, 0.456, 0.406)
 IMAGENET_DEFAULT_STD = (0.229, 0.224, 0.225)
 
 transform_img = transforms.Compose([transforms.Resize(256),
-    transforms.CenterCrop(224)
+    transforms.CenterCrop(224),
     transforms.ToTensor(),
     transforms.Normalize(mean=IMAGENET_DEFAULT_MEAN, std=IMAGENET_DEFAULT_STD),])
 
@@ -43,15 +43,21 @@ def get_model(identifier, num_frames=16):
 
     net = pfDINOV2(model_name)
 
+    def process_output(layer, layer_name, inputs, output):
+        
+        return output
+
     inferencer_kwargs = {
         "fps": 10,
         "layer_activation_format": {
-            "encoder": "TC",
+            "encoder.model.embeddings": "TC",
+            **{f"encoder.model.encoder.layer.{i}": "TC" for i in range(12)}
         },
         "duration": None,#(0, 450),
         "time_alignment": "evenly_spaced",
         "convert_img_to_video":True,
-        "img_duration":450
+        "img_duration":450,
+        "process_output": process_output,
     }
 
     for layer in inferencer_kwargs["layer_activation_format"].keys():

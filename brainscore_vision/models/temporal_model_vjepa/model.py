@@ -34,7 +34,7 @@ def get_model(identifier, num_frames=16):
 
     model_name = load_weight_file(
             bucket="brainscore-vision", 
-            relative_path="neuroai_stanford_weights/vitl16.pth.tar", # change this
+            relative_path="neuroai_stanford_weights/vitl16.pth.tar",
             version_id="BOF7OicVOcNSrq7G.QMhyHWmwpPjnXJTs",
             sha1="611ff15c3da4162f8f7a45cac5409a0fff46ff22"
         )
@@ -42,14 +42,29 @@ def get_model(identifier, num_frames=16):
     # Instantiate the model
 
     net = VJEPA(model_name)
+    T = None
+    H = W = 14
+
+    def process_output(layer, layer_name, inputs, output):
+        if layer_name == "encoder.encoder.patch_embed":
+            global T
+            T = inputs[0].shape[2]
+        else:
+            B, L, C = output.shape
+            assert L == T//2 * H * W
+            output = output.view(B, T//2, H, W, C)
+
+        return output
 
     inferencer_kwargs = {
         "fps": 10,
         "layer_activation_format": {
-            "encoder": "HW",
+            "encoder.encoder.patch_embed": "THWC",
+            **{f"encoder.encoder.blocks.{i}": "THWC" for i in range(0, 24, 2)},
         },
         "duration": None,
         "time_alignment": "evenly_spaced",
+        "process_output": process_output,
     }
 
     for layer in inferencer_kwargs["layer_activation_format"].keys():

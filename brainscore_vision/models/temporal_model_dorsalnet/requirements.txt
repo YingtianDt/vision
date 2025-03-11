@@ -1,0 +1,2 @@
+torchvision
+your_head @ git+https://github.com/YingtianDt/your-head-is-there-to-move-you-around.git

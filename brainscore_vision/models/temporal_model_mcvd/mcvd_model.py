@@ -11,6 +11,7 @@ class MCVD(nn.Module):
     def __init__(self, weights_path, cfg_path):
         
         super().__init__()
+        device = "cpu"
         self.scorenet, self.config = load_model(weights_path, device, cfg_path)
         self.sampler = get_readout_sampler(self.config)
 

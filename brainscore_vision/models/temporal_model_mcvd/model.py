@@ -56,7 +56,7 @@ def get_model(identifier, num_frames=7):
         
     # Instantiate the model
     
-    net = MCVDEncoder(model_path, config_path, identifier)
+    net = MCVDEncoder(model_path, config_path)
 
     inferencer_kwargs = {
         "fps": 25,

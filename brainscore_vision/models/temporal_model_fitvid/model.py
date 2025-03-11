@@ -13,7 +13,7 @@ class FitVidWrapper(PytorchWrapper):
         output = self._model(tensor)
         return output
 
-transform_img = T.Compose([T.Resize(64),
+transform_img = T.Compose([T.Resize((64, 64)),
     T.ToTensor()])
 
 def transform_video(video):

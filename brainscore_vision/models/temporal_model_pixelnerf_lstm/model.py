@@ -28,7 +28,7 @@ class GroupNormalize(object):
 
         return tensor
 
-transform_img = T.Compose([T.Resize(64),
+transform_img = T.Compose([T.Resize((64, 64)),
                            T.ToTensor(),
                            GroupNormalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])
 

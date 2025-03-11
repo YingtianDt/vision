@@ -43,6 +43,17 @@ def get_model(identifier, num_frames=16):
             sha1="8faf42df13f619a8970d653695e98f0643760b54"
         )
         num_blocks = 12
+
+    elif identifier == "VideoMAE-V1-B-smthsmthv2":
+        model_name = "pretrain_videomae_base_patch16_224"
+        pth = load_weight_file(
+            bucket="brainscore-vision",
+            relative_path='temporal_model_VideoMAE/vit_l_smthsmthv2_pt_1200e.pth',  # the model is base, not large ('l' in the path is a typo)
+            version_id="jWvfr5YRunrtbLAWo0_WbObbC48.QiiS",
+            sha1="71d2f19f26c2dbb026ac2234408dedba5e273dea"
+        )
+        num_blocks = 12
+
     elif identifier == "VideoMAE-V1-L":
         model_name = "pretrain_videomae_large_patch16_224"
         pth = load_weight_file(

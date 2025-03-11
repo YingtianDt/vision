@@ -12,4 +12,5 @@ def commit_model(identifier):
 
 
 model_registry["VideoMAE-V1-B"] = lambda: commit_model("VideoMAE-V1-B")
+model_registry["VideoMAE-V1-B-smthsmthv2"] = lambda: commit_model("VideoMAE-V1-B-smthsmthv2")
 model_registry["VideoMAE-V1-L"] = lambda: commit_model("VideoMAE-V1-L")

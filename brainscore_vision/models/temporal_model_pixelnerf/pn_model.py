@@ -28,7 +28,7 @@ class PN(nn.Module):
         bs, num_frames, num_channels, h, w = videos.shape
         videos = videos.flatten(0, 1)
         input_states = self.get_encoder_feats(videos)
-        input_states = input_states.reshape(bs, num_frames, -1).cuda()
+        input_states = input_states.reshape(bs, num_frames, -1).to(videos.device)
         return input_states
 
 # Given sequence of images, predicts next latent
