@@ -58,6 +58,7 @@ def average_repetition(assembly):
     def avg_repr(assembly):
         presentation_coords = [coord for coord, dims, values in walk_coords(assembly)
                                if array_is_element(dims, 'presentation') and coord != 'repetition']
+        if len(presentation_coords) == 0: return assembly
         assembly = assembly.multi_groupby(presentation_coords).mean(dim='presentation', skipna=True)
         return assembly
 
